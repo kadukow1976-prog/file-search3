@@ -8,7 +8,7 @@
 <style>
 :root{
   --bg:#0b0c10;--card:#111317;--text:#e5e7eb;--muted:#9aa1aa;--line:#23262d;
-  --brand:#19c37d;--brand2:#14a169;
+  --brand:#19c37d;--brand2:#14a169;--hl:#2a3a2f;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 -apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Arial,sans-serif}
@@ -21,13 +21,13 @@ a{color:#a7e6c6;text-decoration:underline}
 @media (max-width:720px){.controls{grid-template-columns:1fr 1fr}}
 input,select{width:100%;padding:12px;border:1px solid var(--line);border-radius:12px;background:#0e1116;color:var(--text)}
 input::placeholder{color:#808792}
-.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 14px;background:var(--brand);color:#07110a;
-     border:0;border-radius:12px;font-weight:600;cursor:pointer}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 14px;background:var(--brand);color:#07110a;border:0;border-radius:12px;font-weight:600;cursor:pointer}
 .btn:active{transform:translateY(1px)}
 .table-wrap{overflow:auto}
 table{width:100%;border-collapse:separate;border-spacing:0}
-th,td{padding:12px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
+th,td{padding:12px 10px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:top}
 th{position:sticky;top:0;background:#14171d;z-index:1;text-align:left;font-weight:700}
+mark{background:var(--hl);color:inherit;border-radius:3px;padding:0 .1em}
 .meta{display:flex;align-items:center;gap:10px;justify-content:space-between;padding:10px 12px;border-top:1px solid var(--line);flex-wrap:wrap}
 .meta small{color:var(--muted)}
 .pager{display:flex;gap:8px;align-items:center}
@@ -97,25 +97,68 @@ footer{color:var(--muted);text-align:center;margin:18px 0}
 
 <script>
 /* === НАСТРОЙКИ === */
-const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vR9L9aeACtJASDu24QmYMDUpEkWAFB5977LMJ_FBPuoARlo7I8S_z3x4fzQxW8t7_DF6E3aplRwkS7/pub?gid=0&single=true&output=csv";
-const PASS_HASH_HEX = "3edd428d2ce21c5658a9674dcb2b1620bc7d598317c7365740d8298c6e8b222d";
+const CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vRGL9aeAC7JASDu24QmYMDUpkEwbAfB5977LMJ_FBPUoARUo7IBS_z3x4f2xqW8t7_Df6E3apLRwXS7/pub?gid=0&single=true&output=csv";
+const PASS_HASH_HEX = "eb9747cd372b03e0312597807b47b27f46d957b32666fd3bf61e08c1d9f0fada"; // SHA-256("a1980")
 
 /* === УТИЛИТЫ === */
-const $ = s => document.querySelector(s);
+const $  = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
 const norm = s => (s||"").toLowerCase().replace(/[ёЁ]/g,"е").trim();
 const toHex = b => [...new Uint8Array(b)].map(x=>x.toString(16).padStart(2,"0")).join("");
-function parseCSV(t){
-  const r=[], a=/,(?=(?:(?:[^"]*"){2})*[^"]*$)/;
-  t.split(/\r?\n/).forEach(l=>{ if(!l.trim()) return; r.push(l.split(a).map(v=>v.replace(/^"|"$/g,""))); });
-  return r;
-}
-function guessCell(v){
-  const s=(v||"").trim();
-  if(/^https?:/i.test(s)) return `<a href="${s}" target="_blank" rel="noopener">${s}</a>`;
-  return s;
+const escapeHTML = s => (s||"").replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m]));
+const withBOMStripped = t => t.charCodeAt(0)===0xFEFF ? t.slice(1) : t;
+
+/* CSV-парсер с учетом кавычек и "" внутри */
+function parseCSV(text){
+  const t = withBOMStripped(text);
+  const rows = [];
+  let i=0, field="", row=[], inQuotes=false;
+  while(i<t.length){
+    const ch = t[i++];
+    if(inQuotes){
+      if(ch === '"'){
+        if(t[i] === '"'){ field+='"'; i++; } else { inQuotes=false; }
+      }else{
+        field += ch;
+      }
+    }else{
+      if(ch === '"'){ inQuotes=true; }
+      else if(ch === ','){ row.push(field); field=""; }
+      else if(ch === '\n'){
+        row.push(field); rows.push(row); field=""; row=[];
+      }else if(ch === '\r'){ /* пропускаем CR */ }
+      else { field += ch; }
+    }
+  }
+  if(field.length || row.length) { row.push(field); rows.push(row); }
+  return rows;
 }
 
-/* === ПРОВЕРКА ПАРОЛЯ (с учетом раскладки и пробелов) === */
+/* Рендер ячейки: безопасный текст и безопасная ссылка */
+function renderCell(v, qNorm){
+  const s = (v||"").trim();
+  const isLink = /^https?:\/\//i.test(s);
+  const textForView = highlight(escapeHTML(s), qNorm);
+  if(isLink){
+    const safeHref = s.replace(/"/g,"%22");
+    return `<a href="${safeHref}" target="_blank" rel="noopener">${textForView}</a>`;
+  }
+  return textForView;
+}
+
+/* Подсветка совпадений */
+function highlight(htmlEscapedText, qNorm){
+  if(!qNorm) return htmlEscapedText;
+  const idx = norm(htmlEscapedText).indexOf(qNorm);
+  if(idx === -1) return htmlEscapedText;
+  // простая подстановка по индексам в уже экранированной строке
+  const before = htmlEscapedText.slice(0, idx);
+  const hit    = htmlEscapedText.slice(idx, idx+qNorm.length);
+  const after  = htmlEscapedText.slice(idx+qNorm.length);
+  return `${before}<mark>${hit}</mark>${after}`;
+}
+
+/* === ПРОВЕРКА ПАРОЛЯ (учёт раскладки) === */
 function ruToEnLayout(str){
   const map = {
     'ф':'a','и':'b','с':'c','в':'d','у':'e','а':'f','п':'g','р':'h','ш':'i','о':'j','л':'k','д':'l','ь':'m',
@@ -126,8 +169,16 @@ function ruToEnLayout(str){
   return [...str].map(ch=>map[ch]??ch).join('');
 }
 
+/* === ГЛОБАЛЬНО === */
+let HEAD=[],DATA=[],VIEW=[],page=1,per=50;
+let qInput, perSelect;
+
+/* Дебаунс */
+function debounce(fn, ms){ let t; return (...a)=>{ clearTimeout(t); t=setTimeout(()=>fn(...a), ms); }; }
+
+/* === ИНИЦИАЛИЗАЦИЯ === */
 (async()=>{
-  if(sessionStorage.getItem("ok")==="1"){unlock();return;}
+  if(sessionStorage.getItem("ok")==="1"){ unlock(); return; }
   $("#go").onclick=check;
   $("#pwd").onkeydown=e=>{if(e.key==="Enter")check();}
   async function check(){
@@ -160,50 +211,79 @@ function unlock(){
 }
 
 /* === ОСНОВНАЯ ЛОГИКА === */
-let HEAD=[],DATA=[],VIEW=[],page=1,per=50;
 function bindUI(){
-  $("#q").oninput=applyFilter;
-  $("#clear").onclick=()=>{$("#q").value="";applyFilter();}
-  $("#per").onchange=e=>{per=parseInt(e.target.value)||50;page=1;paint();}
-  $("#prev").onclick=()=>{if(page>1){page--;paint();}}
-  $("#next").onclick=()=>{if(page<Math.ceil(VIEW.length/per)){page++;paint();}}
+  qInput = $("#q");
+  perSelect = $("#per");
+
+  // восстановление состояния
+  const urlQ = new URL(location.href).searchParams.get("q");
+  const savedQ = localStorage.getItem("ugra_q") || "";
+  const initialQ = urlQ ?? savedQ;
+  if(initialQ){ qInput.value = initialQ; }
+
+  const savedPer = parseInt(localStorage.getItem("ugra_per")||"50",10);
+  if([25,50,100].includes(savedPer)){ perSelect.value = String(savedPer); per = savedPer; }
+
+  qInput.oninput = debounce(()=>applyFilter(true), 200);
+  $("#clear").onclick = ()=>{ qInput.value=""; applyFilter(true); };
+  perSelect.onchange = e=>{ per = parseInt(e.target.value)||50; localStorage.setItem("ugra_per", String(per)); page=1; paint(); };
+  $("#prev").onclick = ()=>{ if(page>1){ page--; paint(); } };
+  $("#next").onclick = ()=>{ if(page<Math.ceil(VIEW.length/per)){ page++; paint(); } };
 }
 
 async function init(){
   bindUI();
-  $("#badge").textContent="Загрузка…";
+  setBadge("Загрузка…");
   try{
     const url=CSV_URL+(CSV_URL.includes("?")?"&":"?")+"t="+Date.now();
     const r=await fetch(url,{cache:"no-store"});
-    if(!r.ok)throw new Error("HTTP "+r.status);
+    if(!r.ok) throw new Error("HTTP "+r.status);
     const text=await r.text();
     const rows=parseCSV(text);
-    HEAD=rows[0];DATA=rows.slice(1);
-    $("#tbl thead").innerHTML = "<tr>" + HEAD.map(h=>`<th>${h}</th>`).join("") + "</tr>";
-    applyFilter();
+    if(!rows.length) throw new Error("Пустой CSV");
+    HEAD=rows[0]; DATA=rows.slice(1);
+    $("#tbl thead").innerHTML = "<tr>" + HEAD.map(h=>`<th>${escapeHTML(h)}</th>`).join("") + "</tr>";
+    applyFilter(false);
   }catch(e){
-    $("#badge").textContent="Ошибка загрузки CSV";
+    setBadge("Ошибка загрузки CSV");
+    $("#tbl thead").innerHTML="";
+    $("#tbl tbody").innerHTML=`<tr><td>Не удалось загрузить данные</td></tr>`;
     console.error(e);
   }
 }
 
-function applyFilter(){
-  const q=norm($("#q").value);
-  VIEW=!q?DATA:DATA.filter(r=>r.some(c=>norm(c).includes(q)));
+function setBadge(txt){ $("#badge").textContent = txt; }
+
+function applyFilter(fromTyping){
+  const q = qInput.value;
+  const qn = norm(q);
+  localStorage.setItem("ugra_q", q);
+  // обновляем URL (только при вводе)
+  if(fromTyping){
+    const u = new URL(location.href);
+    if(q){ u.searchParams.set("q", q); } else { u.searchParams.delete("q"); }
+    history.replaceState(null,"",u.toString());
+  }
+  VIEW = !qn ? DATA : DATA.filter(r => r.some(c => norm(c).includes(qn)));
   page=1;
-  paint();
+  paint(qn);
 }
 
-function paint(){
+function paint(qNorm=""){
   const total=VIEW.length;
   const pages=Math.max(1,Math.ceil(total/per));
   const start=(page-1)*per;
   const slice=VIEW.slice(start,start+per);
-  $("#tbl tbody").innerHTML = slice.map(r=>"<tr>"+r.map(c=>`<td>${guessCell(c)}</td>`).join("")+"</tr>").join("");
-  $("#pageInfo").textContent = `Найдено: ${total} / Всего: ${DATA.length} — стр. ${page}/${pages}`;
-  $("#badge").textContent = total ? `Записей: ${total}` : "Ничего не найдено";
-  $("#prev").disabled = page<=1;
-  $("#next").disabled = page>=pages;
+
+  const rowsHTML = slice.map(r=>"<tr>"+r.map(c=>`<td>${renderCell(c, qNorm)}</td>`).join("")+"</tr>").join("");
+  $("#tbl tbody").innerHTML = rowsHTML;
+
+  $("#pageInfo").textContent = `Найдено: ${total} / Всего: ${DATA.length} — стр. ${Math.min(page,pages)}/${pages}`;
+  setBadge( total ? `Записей: ${total}` : "Ничего не найдено" );
+
+  const noData = total===0;
+  $("#prev").disabled = noData || page<=1;
+  $("#next").disabled = noData || page>=pages;
 }
 </script>
 </body>
